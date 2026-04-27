@@ -2,7 +2,6 @@ import streamlit as st
 import plotly.express as px
 
 from src.data.data_loader import DataLoader
-from src.data.registry import DataRegistry
 from src.engine.analytics_engine import AnalyticsEngine
 from src.engine.groupby_engine import GroupByEngine
 
@@ -13,128 +12,266 @@ from src.ai_engine.narrative_generator.narrative_generator import NarrativeGener
 
 
 st.set_page_config(layout="wide")
-
 st.title("AI Product Analytics Dashboard")
 
-# -----------------------------
-# Load Data
-# -----------------------------
+# ----------------------------------
+# Load Data (cached)
+# ----------------------------------
 
-loader = DataLoader(data_path="data/raw")
-loader.load_all()
+@st.cache_data
+def load_data():
+    loader = DataLoader(data_path="data/raw")
+    loader.load_all()
+    joined = loader.get_joined_dataset()
+    return loader, joined
 
-joined_df = loader.get_joined_dataset()
+loader, joined_df = load_data()
 
-# -----------------------------
-# KPI Section
-# -----------------------------
 
-st.header("Key Metrics")
+# ----------------------------------
+# KPI Computation (cached)
+# ----------------------------------
 
-col1, col2, col3 = st.columns(3)
+@st.cache_data
+def compute_kpis():
+    total_revenue = AnalyticsEngine.total_revenue()
+    total_orders = AnalyticsEngine.total_orders()
+    aov = AnalyticsEngine.average_order_value()
+    return total_revenue, total_orders, aov
 
-col1.metric("Total Revenue", f"{AnalyticsEngine.total_revenue():,.0f}")
-col2.metric("Total Orders", AnalyticsEngine.total_orders())
-col3.metric("Average Order Value", f"{AnalyticsEngine.average_order_value():,.0f}")
+total_revenue, total_orders, aov = compute_kpis()
 
-# -----------------------------
-# Revenue Trend
-# -----------------------------
 
-st.header("Revenue Trend")
+# ----------------------------------
+# Page Tabs
+# ----------------------------------
 
-revenue_month = GroupByEngine.compute("revenue", "month")
+tab1, tab2, tab3 = st.tabs([
+    "Business Overview",
+    "AI Insights",
+    "Executive Report"
+])
 
-fig = px.line(
-    revenue_month,
-    x="month",
-    y="revenue",
-    markers=True,
-    title="Monthly Revenue"
-)
 
-st.plotly_chart(fig, use_container_width=True)
+# ======================================================
+# TAB 1 — BUSINESS OVERVIEW
+# ======================================================
 
-# -----------------------------
-# Trend Detection
-# -----------------------------
+with tab1:
 
-trend_detector = TrendDetector()
-trends = trend_detector.analyze(revenue_month, "month", "revenue")
+    st.header("Key Metrics")
 
-st.header("Detected Trends")
+    col1, col2, col3 = st.columns(3)
 
-if not trends:
-    st.info("No strong trends detected.")
-else:
-    for t in trends:
-        st.write("•", t["description"])
+    col1.metric("Total Revenue", f"{total_revenue:,.0f}")
+    col2.metric("Total Orders", total_orders)
+    col3.metric("Average Order Value", f"{aov:,.0f}")
 
-# -----------------------------
-# Anomaly Detection
-# -----------------------------
+    st.header("Revenue Trend")
 
-st.header("Anomaly Detection")
+    revenue_month = GroupByEngine.compute("revenue", "month")
 
-an = AnomalyDetector()
+    fig = px.line(
+        revenue_month,
+        x="month",
+        y="revenue",
+        markers=True,
+        title="Monthly Revenue"
+    )
 
-anomalies = an.analyze(
-    df=revenue_month,
-    dim="month",
-    metric="revenue",
-    joined_df=joined_df,
-    debug_force=True
-)
+    st.plotly_chart(fig, use_container_width=True)
 
-st.json(anomalies)
 
-# -----------------------------
-# Dashboard Recommender
-# -----------------------------
+# ======================================================
+# TAB 2 — AI INSIGHTS
+# ======================================================
 
-st.header("Recommended Dashboards")
+with tab2:
 
-recommender = DashboardRecommender()
+    # -----------------------------
+    # Trend Detection
+    # -----------------------------
 
-domains = ["product", "marketing", "behavior"]
+    st.header("Detected Trends")
 
-for domain in domains:
+    trend_detector = TrendDetector()
 
-    st.subheader(domain.capitalize())
+    trends = trend_detector.analyze(
+        revenue_month,
+        "month",
+        "revenue"
+    )
 
-    result = recommender.create_dashboard(domain)
+    if not trends:
+        st.info("No strong trends detected.")
+    else:
+        for t in trends:
+            desc = t.get("description", str(t))
+            st.warning(desc)
 
-    st.write("Dashboard Layout")
-    st.json(result["dashboard"])
 
-    st.write("Insights")
-    for ins in result["insights"]:
-        st.write("•", ins["insight"])
+    # -----------------------------
+    # Anomaly Detection
+    # -----------------------------
 
-    st.write("Recommendations")
-    for rec in result["recommendations"]:
-        for r in rec["recommendations"]:
+    st.header("Anomaly Detection")
+
+    an = AnomalyDetector()
+
+    anomalies = an.analyze(
+        df=revenue_month,
+        dim="month",
+        metric="revenue",
+        joined_df=joined_df,
+        debug_force=True
+    )
+
+    if anomalies.get("has_anomaly"):
+
+        st.error("Revenue anomaly detected")
+
+        st.write(
+            "Deviation:",
+            f"{anomalies.get('deviation_pct',0):.2f}%"
+        )
+
+        if "root_causes" in anomalies:
+
+            st.subheader("Possible Root Causes")
+
+            for cause in anomalies["root_causes"]:
+
+                dim = cause.get("dimension","?")
+                seg = cause.get("segment","?")
+                impact = cause.get("contribution_pct",0)
+
+                st.write(
+                    f"• {dim} = {seg} "
+                    f"(Impact: {impact:.1f}%)"
+                )
+
+    else:
+
+        st.success("No anomaly detected")
+
+
+    # -----------------------------
+    # Dashboard Recommender
+    # -----------------------------
+
+    st.header("AI Recommended Dashboards")
+
+    recommender = DashboardRecommender()
+
+    domains = ["product", "marketing", "behavior"]
+
+    all_insights = []
+    all_recommendations = []
+
+    for domain in domains:
+
+        st.subheader(domain.capitalize())
+
+        result = recommender.create_dashboard(domain)
+
+        st.write("Dashboard Layout")
+
+        st.json(result["dashboard"])
+
+        st.write("Insights")
+
+        for ins in result["insights"]:
+
+            text = ins.get("insight", str(ins))
+
+            st.info(text)
+
+            all_insights.append(text)
+
+        st.write("Recommendations")
+
+        for rec in result["recommendations"]:
+
+            for r in rec.get("recommendations",[]):
+
+                st.write("•", r)
+
+                all_recommendations.append(r)
+
+
+# ======================================================
+# TAB 3 — EXECUTIVE REPORT
+# ======================================================
+
+with tab3:
+
+    st.header("Executive Narrative")
+
+    narrator = NarrativeGenerator()
+
+    narrative = narrator.generate_full_narrative(
+        domain="product",
+        metrics={
+            "total_revenue": total_revenue,
+            "total_orders": total_orders,
+            "avg_order_value": aov
+        },
+        trends=trends if trends else [],
+        anomalies=anomalies if anomalies else {},
+        insights=all_insights,
+        recommendations=all_recommendations
+    )
+
+    st.text_area(
+        "AI Generated Business Report",
+        narrative,
+        height=300
+    )
+
+
+    # -----------------------------
+    # Business Problems
+    # -----------------------------
+
+    st.header("Business Problems Identified")
+
+    problems = [
+        "Revenue shows unstable trend across months.",
+        "Certain customer segments contribute disproportionately to revenue spikes.",
+        "Product recommendation effectiveness may be limited."
+    ]
+
+    for p in problems:
+        st.write("•", p)
+
+
+    # -----------------------------
+    # Proposed Solutions
+    # -----------------------------
+
+    st.header("Proposed Solutions")
+
+    solutions = {
+        "Revenue instability": [
+            "Introduce seasonal marketing campaigns",
+            "Implement dynamic pricing strategies",
+            "Improve demand forecasting"
+        ],
+        "Segment concentration": [
+            "Expand marketing to new customer segments",
+            "Launch targeted promotions",
+            "Analyze high-value segments deeper"
+        ],
+        "Recommendation limitations": [
+            "Improve AI recommendation model",
+            "Use user behavior signals",
+            "Introduce personalized bundles"
+        ]
+    }
+
+    for problem, recs in solutions.items():
+
+        st.subheader(problem)
+
+        for r in recs:
             st.write("•", r)
-
-# -----------------------------
-# Narrative
-# -----------------------------
-
-st.header("Executive Narrative")
-
-narrator = NarrativeGenerator()
-
-narrative = narrator.generate_full_narrative(
-    domain="product",
-    metrics={
-        "total_revenue": AnalyticsEngine.total_revenue(),
-        "total_orders": AnalyticsEngine.total_orders(),
-        "avg_order_value": AnalyticsEngine.average_order_value()
-    },
-    trends=[],
-    anomalies=[],
-    insights=["Revenue fluctuates due to demand changes."],
-    recommendations=["Improve product recommendation engine."]
-)
-
-st.text(narrative)
