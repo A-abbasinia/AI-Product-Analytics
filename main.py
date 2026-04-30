@@ -1,5 +1,5 @@
 from src.data.data_loader import DataLoader
-from src.data.registry import DataRegistry
+from src.data.registry import registry
 from src.engine.analytics_engine import AnalyticsEngine
 from src.metrics.metric_registry import MetricRegistry
 from src.engine.ai_query_engine import AIQueryEngine
@@ -24,9 +24,9 @@ if __name__ == "__main__":
     print("\n===================================")
     print("Loaded Tables:")
     print("===================================")
-    print(DataRegistry.list_tables())
+    print(registry.list_tables())
 
-    customers_df = DataRegistry.get("customers")
+    customers_df = registry.get("customers")
     print("\nCustomers shape:", customers_df.shape)
     print(customers_df.head())
 
